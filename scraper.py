@@ -75,7 +75,6 @@ class EbayScraper:
             except AttributeError as e:
                 logger.error("Error extracting condition for %s: %s", url, e)
 
-            # Extracting availability and sold information
             try:
                 availability_sold = soup.select('div.d-quantity__availability span.ux-textspans')
                 availability_sold = [ele.get_text() for ele in availability_sold]
@@ -131,6 +130,112 @@ class EbayScraper:
 
             for result in sorted_results:
                 csv_writer.writerow(result)
+                
+                
+class FlipkartScraper:
+    def __init__(self, query):
+        self.query = query
+        self.results = []
+        self.num_products = 1
+        self.query_template = Template("https://www.flipkart.com/search?q=$query")
+
+    def get_links(self):
+        search_query = self.query_template.substitute(query=self.query)
+        try:
+            page = requests.get(search_query)
+            page.raise_for_status()
+            soup = BeautifulSoup(page.text, 'html.parser')
+            links = soup.select('a.s1Q9rs')
+            links = [link.get('href') for link in links]
+            links = ["https://www.flipkart.com"+link for link in links]
+            logger.info("Search Query Executed: %s", datetime.now().strftime('%H:%M:%S'))
+            return links
+        except requests.RequestException as e:
+            logger.error("Error executing Search Query %s: %s", search_query, e)
+            return []
+
+    def get_product_details(self, serial_number, url):
+        result = {
+            'Serial Number': serial_number,
+            'Title': '',
+            'Price': '',
+            'Rating': '',
+            'Offer': ''
+        }
+
+        try:
+            page = requests.get(url)
+            page.raise_for_status()
+            soup = BeautifulSoup(page.text, 'html.parser')
+
+            try:
+                result['Price'] = soup.select_one('div._16Jk6d').get_text()
+            except AttributeError as e:
+                logger.error("Error extracting price for %s: %s", url, e)
+                return
+            try:
+                result['Title'] = soup.select_one('span.B_NuCI').get_text()
+            except AttributeError as e:
+                logger.error("Error extracting title for %s: %s", url, e)
+                return
+
+            try:
+                result['Rating'] = soup.select_one('div._3LWZlK').get_text()
+            except AttributeError as e:
+                logger.error("Error extracting condition for %s: %s", url, e)
+
+            try:
+                result['Offer'] = soup.select_one('div._3Ay6Sb').get_text()
+            except AttributeError as e:
+                logger.error("Error extracting condition for %s: %s", url, e)
+
+
+        except requests.RequestException as e:
+            logger.error("Error processing URL %s: %s", url, e)
+        self.num_products+=1
+        self.results.append(result)
+
+    def single_threaded_scraper(self):
+        links = self.get_links()
+        start_time = time.time()
+        try:
+            for url in links:
+                self.get_product_details(self.num_products, url)
+
+        except requests.RequestException as e:
+            logger.error("Error executing search query: %s", e)
+        end_time = time.time()
+        elapsed_time = end_time - start_time
+        logger.info("All links parsed: %s", datetime.now().strftime('%H:%M:%S'))
+        logger.info("Time taken for single-threaded processing: %.2f seconds", elapsed_time)
+        
+        
+    def multi_threaded_scraper(self, max_threads):
+        links = self.get_links()
+        start_time = time.time()
+
+        try:
+            with ThreadPoolExecutor(max_workers=max_threads) as executor:
+                for serial_number, url in enumerate(links, start=1):
+                    executor.submit(self.get_product_details, serial_number, url)
+
+        except requests.RequestException as e:
+            logger.error(f"Error executing search query: {e}")
+            
+        end_time = time.time()
+        elapsed_time = end_time - start_time
+        logger.info("All links parsed: %s", datetime.now().strftime('%H:%M:%S'))
+        logger.info("Time taken for multi-threaded processing: %.2f seconds", elapsed_time)
+
+    def write_results_to_csv(self, filename):
+        sorted_results = sorted(self.results, key=lambda x: x['Serial Number'])
+        with open(filename, 'w', newline='') as csvfile:
+            fieldnames = ['Serial Number', 'Title', 'Price', 'Rating', 'Offer']
+            csv_writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+            csv_writer.writeheader()
+
+            for result in sorted_results:
+                csv_writer.writerow(result)
 
 
 if __name__ == "__main__":
@@ -140,3 +245,10 @@ if __name__ == "__main__":
     ebay_scraper2.multi_threaded_scraper(10)
     ebay_scraper1.write_results_to_csv("earphones.csv")
     ebay_scraper2.write_results_to_csv("laptops.csv")
+    
+    flipkart_scraper1 = FlipkartScraper(query="earphones")
+    flipkart_scraper2 = FlipkartScraper(query="laptop")
+    flipkart_scraper1.single_threaded_scraper()
+    flipkart_scraper2.multi_threaded_scraper(10)
+    flipkart_scraper1.write_results_to_csv("earphones2.csv")
+    flipkart_scraper2.write_results_to_csv("laptops2.csv")
